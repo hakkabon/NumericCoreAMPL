@@ -14,3 +14,4 @@ NUMERICCORE_PACKAGE_PATH=/path/to/Swift-NumericCore swift test
 ```
 
 For the supported syntax and examples, see [Grammar](docs/ampl-grammar.md).
+For typed two-stage models and decomposition, see [Benders models](docs/benders.md).

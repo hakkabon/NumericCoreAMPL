@@ -99,6 +99,18 @@ public struct OptimizationSolutionDiagnostics: Sendable, Hashable {
 }
 
 extension CompiledProblem {
+    func sparseLinearProblem() throws -> SparseLinearProblem {
+        try SparseLinearProblem(
+            objective: objective.storage, rows: constraints.rows, columns: constraints.cols,
+            rowPointers: constraints.csrRowPointers, columnIndices: constraints.csrColumnIndices,
+            values: constraints.csrValues,
+            rowBounds: rowBounds.map { .init(lower: $0.lower, upper: $0.upper) },
+            variableBounds: zip(variableLowerBounds, variableUpperBounds).map {
+                .init(lower: $0.0, upper: $0.1)
+            },
+            isInteger: variableIsInteger)
+    }
+
     /// Solves this presolved problem via the chosen `nc-optimize`
     /// solver through NumericCoreOptimization. This is the
     /// step `docs/design/ampl-grammar.md`'s "Next steps" listed as not
@@ -120,15 +132,7 @@ extension CompiledProblem {
     public func solve(
         configuration: OptimizationSolveConfiguration
     ) throws -> LPSolution {
-        let problem = try SparseLinearProblem(
-            objective: objective.storage, rows: constraints.rows, columns: constraints.cols,
-            rowPointers: constraints.csrRowPointers, columnIndices: constraints.csrColumnIndices,
-            values: constraints.csrValues,
-            rowBounds: rowBounds.map { .init(lower: $0.lower, upper: $0.upper) },
-            variableBounds: zip(variableLowerBounds, variableUpperBounds).map {
-                .init(lower: $0.0, upper: $0.1)
-            },
-            isInteger: variableIsInteger)
+        let problem = try sparseLinearProblem()
         let result = try SparseLinearSolver.solve(problem, configuration: configuration)
         let correctedObjective = result.objectiveValue * objectiveSign + objectiveConstant
         let values = result.variableValues
