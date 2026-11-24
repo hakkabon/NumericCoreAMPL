@@ -49,8 +49,17 @@ Pass `compiled.problem` to `DistributedBendersCoordinator` to use the same
 lowering with remote workers. Decode a distributed incumbent with
 `namedIncumbent(_:)` and convert its bounds with `sourceBounds(lower:upper:)`.
 
-The frontend requires a Swift-NumericCore release with the Benders model
-types, or a local checkout selected with `NUMERICCORE_PACKAGE_PATH`.
-The extensive form uses the existing simplex bridge. Local and distributed
-decomposition require their respective UniFFI capabilities. Textual
-decomposition annotations are a later frontend extension.
+The minimum supported pairing for all three solve paths is Swift-NumericCore
+**2.0.0** with its pinned Rust-NumericCore **v0.45.0** XCFramework.
+SwiftPM obtains the Rust binary through Swift-NumericCore. The extensive form
+uses the simplex bridge, and the integration test requires both local and
+distributed Benders. It compares their incumbents and bounds in source
+objective coordinates and replays the distributed proof for both objective
+senses.
+
+Run `env -u NUMERICCORE_PACKAGE_PATH swift test` in a clean checkout to
+validate with the normal remote dependency. Before the Swift release is
+tagged, use the same GitHub URL with the exact candidate commit as the
+`revision:` requirement in a disposable copy of the manifest.
+
+Textual decomposition annotations are a later frontend extension.

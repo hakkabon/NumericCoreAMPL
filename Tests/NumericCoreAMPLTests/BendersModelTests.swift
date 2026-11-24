@@ -23,7 +23,10 @@ final class BendersModelTests: XCTestCase {
         return .init(firstStage: first, scenarios: scenarios)
     }
 
-    func testParsedBlocksMatchTheExtensiveAndDecomposedSolutions() throws {
+    func testParsedBlocksAgreeAcrossExtensiveLocalAndDistributedSolves() throws {
+        XCTAssertTrue(BendersSolver.isAvailable, "Local Benders requires the matching Rust FFI release")
+        XCTAssertTrue(DistributedBendersCoordinator.isAvailable, "Distributed Benders requires the matching Rust FFI release")
+
         for maximize in [false, true] {
             let compiled = try fixture(maximize: maximize).compile()
             XCTAssertEqual(compiled.problem.firstStage.objective, [1.5])
@@ -41,17 +44,35 @@ final class BendersModelTests: XCTestCase {
             let transformed = compiled.sourceBounds(lower: 1, upper: 3)
             XCTAssertEqual(transformed.lower, maximize ? 4 : 8)
             XCTAssertEqual(transformed.upper, maximize ? 6 : 10)
-            if BendersSolver.isAvailable {
-                let solve = try compiled.solve()
-                XCTAssertEqual(solve.numericalResult.termination, .converged)
-                XCTAssertEqual(try XCTUnwrap(solve.incumbent).objective, expected, accuracy: 1e-8)
-                XCTAssertEqual(try XCTUnwrap(solve.lowerBound), expected, accuracy: 1e-8)
-                XCTAssertEqual(try XCTUnwrap(solve.upperBound), expected, accuracy: 1e-8)
-            } else {
-                XCTAssertThrowsError(try compiled.solve()) {
-                    XCTAssertEqual($0 as? LPDecompositionError, .unsupportedFFI)
+            let local = try compiled.solve()
+            XCTAssertEqual(local.numericalResult.termination, .converged)
+            let localIncumbent = try XCTUnwrap(local.incumbent)
+            XCTAssertEqual(localIncumbent.objective, point.objective, accuracy: 1e-8)
+            XCTAssertEqual(try XCTUnwrap(localIncumbent.firstStage["capacity"]), 2, accuracy: 1e-8)
+            XCTAssertEqual(try XCTUnwrap(local.lowerBound), point.objective, accuracy: 1e-8)
+            XCTAssertEqual(try XCTUnwrap(local.upperBound), point.objective, accuracy: 1e-8)
+
+            let options = DistributedBendersOptions(maxRounds: 10)
+            let coordinator = try DistributedBendersCoordinator(problem: compiled.problem, options: options)
+            for _ in 0..<options.maxRounds {
+                guard try coordinator.progress().status == .awaitingReplies else { break }
+                for job in try coordinator.pendingJobs().reversed() {
+                    let reply = try DistributedBendersCoordinator.executeJob(job.json)
+                    XCTAssertEqual(try coordinator.submit(reply), .accepted)
                 }
             }
+            XCTAssertEqual(try coordinator.progress().status, .converged)
+            let proof = try coordinator.exportProof()
+            let audited = try DistributedBendersCoordinator.verify(
+                problem: compiled.problem, proof: proof, options: options)
+            XCTAssertEqual(audited.claim, .optimality)
+            XCTAssertGreaterThan(audited.verifiedSubproblems, 0)
+            let distributedIncumbent = try compiled.namedIncumbent(XCTUnwrap(audited.incumbent))
+            XCTAssertEqual(distributedIncumbent.objective, point.objective, accuracy: 1e-8)
+            XCTAssertEqual(try XCTUnwrap(distributedIncumbent.firstStage["capacity"]), 2, accuracy: 1e-8)
+            let bounds = compiled.sourceBounds(lower: audited.lowerBound, upper: audited.upperBound)
+            XCTAssertEqual(try XCTUnwrap(bounds.lower), point.objective, accuracy: 1e-8)
+            XCTAssertEqual(try XCTUnwrap(bounds.upper), point.objective, accuracy: 1e-8)
         }
     }
 
@@ -66,21 +87,5 @@ final class BendersModelTests: XCTestCase {
         XCTAssertThrowsError(try BendersModel(firstStage: model.firstStage, scenarios: [model.scenarios[0]]).compile()) {
             XCTAssertEqual($0 as? BendersModelError, .invalidScenarios)
         }
-    }
-
-    func testSameLoweringWorksWithDistributedBenders() throws {
-        guard DistributedBendersCoordinator.isAvailable else { return }
-        let compiled = try fixture().compile()
-        let coordinator = try DistributedBendersCoordinator(problem: compiled.problem)
-        for _ in 0..<10 {
-            guard try coordinator.progress().status == .awaitingReplies else { break }
-            for job in try coordinator.pendingJobs().reversed() {
-                try coordinator.submit(DistributedBendersCoordinator.executeJob(job.json))
-            }
-        }
-        let proof = try DistributedBendersCoordinator.verify(problem: compiled.problem, proof: coordinator.exportProof())
-        XCTAssertEqual(proof.claim, .optimality)
-        let incumbent = try compiled.namedIncumbent(XCTUnwrap(proof.incumbent))
-        XCTAssertEqual(incumbent.objective, 13.2, accuracy: 1e-8)
     }
 }
