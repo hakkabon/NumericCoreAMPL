@@ -1,7 +1,7 @@
 # Two-stage Benders models
 
-`BendersModel` composes existing NumericCoreAMPL models into a continuous
-two-stage linear problem. Build each block with `Model` or parse it with
+`BendersModel` composes existing NumericCoreAMPL models into a
+two-stage linear problem. Call `compile()` for the continuous path. Build each block with `Model` or parse it with
 `AMPLParser.parse`. Attach the scenario probability and declare which
 scenario variables refer to first-stage variables when constructing
 `BendersModelScenario`.
@@ -63,3 +63,27 @@ tagged, use the same GitHub URL with the exact candidate commit as the
 `revision:` requirement in a disposable copy of the manifest.
 
 Textual decomposition annotations are a later frontend extension.
+
+## Indexed capacity planning
+
+Each stage can use [finite indexed declarations](ampl-grammar.md#finite-indexed-models).
+The capacity model declares depots, regions, and route tuples, then uses
+filtered sums for depot capacity and regional demand. Scenario data supplies
+demand and route limits. A typed scenario maps expanded names such as
+`plan[0]` to `buy[0]` using the existing `sharedVariables` dictionary.
+The [capacity regression](../Tests/NumericCoreAMPLTests/IndexedModelTests.swift)
+contains the eight-depot model and reproduces the extensive-form objective
+of 4432.875.
+
+## Mixed-integer stages
+
+Call `compileInteger()` on the same typed partition to keep integrality in
+the first stage and private scenario variables. Use the returned
+`CompiledIntegerBendersModel.solve()` for native integer Benders or solve
+its `extensiveForm()` by branch-and-bound as a reference. Named incumbents
+and bounds use source objective coordinates for both objective senses.
+
+An alias inherits first-stage integrality. An explicitly integer alias
+must refer to an integer master variable. Native integer Benders requires
+finite bounds on integer variables, and integer recourse can be coupled
+only to binary master columns.

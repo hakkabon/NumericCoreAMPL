@@ -30,7 +30,11 @@ public enum BendersModelError: Error, Equatable {
     case invalidIncumbent
 }
 
-/// A continuous two-stage model with an explicitly declared partition.
+public enum IntegerBendersModelError: Error, Equatable {
+    case incompatibleSharedIntegrality(scenario: String, name: String)
+}
+
+/// A two-stage linear model with an explicitly declared partition.
 public struct BendersModel {
     public let firstStage: Model
     public let scenarios: [BendersModelScenario]
@@ -41,6 +45,15 @@ public struct BendersModel {
     }
 
     public func compile() throws -> CompiledBendersModel {
+        try compile(allowInteger: false)
+    }
+
+    /// Lower an explicitly partitioned mixed-integer model for Integer Benders.
+    public func compileInteger() throws -> CompiledIntegerBendersModel {
+        .init(compiled: try compile(allowInteger: true))
+    }
+
+    private func compile(allowInteger: Bool) throws -> CompiledBendersModel {
         let totalWeight = scenarios.reduce(0.0) { $0 + $1.probability }
         guard !scenarios.isEmpty, abs(totalWeight - 1) <= 1e-10,
               scenarios.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -50,7 +63,7 @@ public struct BendersModel {
         }
         let source = try firstStage.compile()
         let master = try source.sparseLinearProblem()
-        guard !master.isInteger.contains(true) else { throw BendersModelError.integerVariables }
+        guard allowInteger || !master.isInteger.contains(true) else { throw BendersModelError.integerVariables }
         let masterIndices = Dictionary(uniqueKeysWithValues: source.variableNames.enumerated().map { ($1, $0) })
         var masterObjective = master.objective
         var offset = source.objectiveConstant
@@ -59,7 +72,7 @@ public struct BendersModel {
         for scenario in scenarios {
             let compiled = try scenario.model.compile()
             let lp = try compiled.sparseLinearProblem()
-            guard !lp.isInteger.contains(true) else { throw BendersModelError.integerVariables }
+            guard allowInteger || !lp.isInteger.contains(true) else { throw BendersModelError.integerVariables }
             guard compiled.objectiveSign == source.objectiveSign else {
                 throw BendersModelError.incompatibleObjectiveSense(scenario: scenario.name)
             }
@@ -80,6 +93,9 @@ public struct BendersModel {
                 guard (localBound.lower == nil || localBound.lower == master.variableBounds[masterColumn].lower),
                       (localBound.upper == nil || localBound.upper == master.variableBounds[masterColumn].upper) else {
                     throw BendersModelError.incompatibleSharedBounds(scenario: scenario.name, name: name)
+                }
+                if lp.isInteger[column] && !master.isInteger[masterColumn] {
+                    throw IntegerBendersModelError.incompatibleSharedIntegrality(scenario: scenario.name, name: name)
                 }
                 shared[column] = masterColumn
             }
@@ -107,7 +123,8 @@ public struct BendersModel {
             let localMatrix = try SparseMatrix(rows: lp.rows, cols: locals.count, entries: recourse)
             let couplingMatrix = try SparseMatrix(rows: lp.rows, cols: master.columns, entries: coupling)
             let local = try linearProblem(localMatrix, objective: locals.map { lp.objective[$0] },
-                                          rows: lp.rowBounds, variables: locals.map { lp.variableBounds[$0] })
+                                          rows: lp.rowBounds, variables: locals.map { lp.variableBounds[$0] },
+                                          isInteger: locals.map { lp.isInteger[$0] })
             blocks.append(.init(id: .init(name: scenario.name), probability: weight,
                                 recourse: local, coupling: couplingMatrix))
             mappings.append(.init(name: scenario.name, variables: locals.map { compiled.variableNames[$0] },
@@ -116,7 +133,8 @@ public struct BendersModel {
         }
         guard offset.isFinite else { throw PresolveError.nonFiniteModelValue }
         let first = try linearProblem(source.constraints, objective: masterObjective,
-                                      rows: master.rowBounds, variables: master.variableBounds)
+                                      rows: master.rowBounds, variables: master.variableBounds,
+                                      isInteger: master.isInteger)
         return CompiledBendersModel(problem: .init(firstStage: first, scenarios: blocks),
                                    firstStageVariables: source.variableNames, mappings: mappings,
                                    objectiveSign: source.objectiveSign, objectiveOffset: offset)
@@ -197,6 +215,7 @@ public struct CompiledBendersModel {
         var objective = master.objective
         var rowBounds = master.rowBounds
         var variableBounds = master.variableBounds
+        var isInteger = master.isInteger
         var entries: [SparseEntry<Double>] = []
         func append(_ lp: SparseLinearProblem, rowOffset: Int, columnOffset: Int) {
             for row in 0..<lp.rows {
@@ -221,9 +240,11 @@ public struct CompiledBendersModel {
             objective += lp.objective.map { block.probability * $0 }
             rowBounds += lp.rowBounds
             variableBounds += lp.variableBounds
+            isInteger += lp.isInteger
         }
         let matrix = try SparseMatrix(rows: rowBounds.count, cols: objective.count, entries: entries)
-        return try linearProblem(matrix, objective: objective, rows: rowBounds, variables: variableBounds)
+        return try linearProblem(matrix, objective: objective, rows: rowBounds, variables: variableBounds,
+                                 isInteger: isInteger)
     }
 
     /// Decode the point and minimization objective returned by an extensive-form solver.
@@ -265,9 +286,41 @@ public struct CompiledBendersModel {
     }
 }
 
+public struct IntegerBendersModelResult {
+    public let numericalResult: IntegerBendersResult
+    public let incumbent: NamedBendersSolution?
+    public let lowerBound: Double?
+    public let upperBound: Double?
+}
+
+public struct CompiledIntegerBendersModel {
+    fileprivate let compiled: CompiledBendersModel
+
+    /// The normalized minimization model for the native integer Benders solver.
+    public var problem: BendersProblem { compiled.problem }
+    public var firstStageVariables: [String] { compiled.firstStageVariables }
+
+    public func solve(options: IntegerBendersOptions = .init()) throws -> IntegerBendersModelResult {
+        let result = try IntegerBendersSolver.solve(problem, options: options)
+        let bounds = compiled.sourceBounds(lower: result.lowerBound, upper: result.upperBound)
+        return .init(numericalResult: result, incumbent: try result.incumbent.map(compiled.namedIncumbent),
+                     lowerBound: bounds.lower, upperBound: bounds.upper)
+    }
+
+    /// The deterministic equivalent retains first-stage and recourse integrality.
+    public func extensiveForm() throws -> SparseLinearProblem {
+        try compiled.extensiveForm()
+    }
+
+    public func namedExtensiveSolution(point: [Double], objective: Double) throws -> NamedBendersSolution {
+        try compiled.namedExtensiveSolution(point: point, objective: objective)
+    }
+}
+
 private func linearProblem(_ matrix: SparseMatrix<Double>, objective: [Double],
-                           rows: [ParameterBound], variables: [ParameterBound]) throws -> SparseLinearProblem {
+                           rows: [ParameterBound], variables: [ParameterBound],
+                           isInteger: [Bool]) throws -> SparseLinearProblem {
     try .init(objective: objective, rows: matrix.rows, columns: matrix.cols,
               rowPointers: matrix.csrRowPointers, columnIndices: matrix.csrColumnIndices,
-              values: matrix.csrValues, rowBounds: rows, variableBounds: variables)
+              values: matrix.csrValues, rowBounds: rows, variableBounds: variables, isInteger: isInteger)
 }

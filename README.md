@@ -13,5 +13,6 @@ checkout, run:
 NUMERICCORE_PACKAGE_PATH=/path/to/Swift-NumericCore swift test
 ```
 
-For the supported syntax and examples, see [Grammar](docs/ampl-grammar.md).
-For typed two-stage models and decomposition, see [Benders models](docs/benders.md).
+For finite indexed sets, parameter tables, filtered sums, and scalar syntax,
+see [Grammar](docs/ampl-grammar.md). For typed continuous and mixed-integer
+two-stage models, see [Benders models](docs/benders.md).

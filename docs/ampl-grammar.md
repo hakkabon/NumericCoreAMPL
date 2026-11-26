@@ -12,16 +12,10 @@ Working sketch for `NumericCoreAMPL`'s modeling-language front end,
 intended as the starting grammar to hand to the existing
 `Grammar`/`Lexer`/`Parser` Swift packages (see ADR 0005's sibling
 reasoning: reuse what already exists rather than hand-rolling a new
-parser). This is **not** full AMPL — it's the smallest subset that can
-express LP, MILP, and unindexed smooth nonlinear models.
-
-Still excluded: `set` declarations and indexed expressions
-(`sum {i in I} ...`), piecewise-linear terms, and user-defined functions.
-Add these as separate later grammar extensions —
-indexed expressions in particular change the shape of the AST
-significantly (an expression becomes a function of an index tuple, not
-a fixed value) and are worth getting right in isolation rather than
-designing alongside everything else at once.
+parser). The supported subset expresses LP, MILP, and smooth nonlinear models with
+scalar declarations or finite indexed families. Separate data files, set
+comprehensions, piecewise-linear terms, and user-defined functions are
+future grammar extensions.
 
 One implemented extension beyond the EBNF below: `linear_expr` accepts
 an optional leading `+`/`-` before its first term (so `-3 x + 2 y` parses
@@ -75,6 +69,39 @@ digit        = "0".."9" ;
 The `linear_expr` productions document the affine subset retained for
 compatibility. The parser now consumes `algebraic_expr`; expressions that admit
 an affine projection still compile through the original LP/MILP path.
+
+## Finite indexed models
+
+A `set NAME := ...;` statement declares an ordered list of distinct
+integer or symbolic members. A set can contain tuples of uniform arity.
+Index declarations use `{i in I}`, `{(i,j) in ROUTES}`, or a Cartesian
+product such as `{i in I, j in J}`. An optional equality after `:` filters
+the resulting tuples. Index domains use sets declared earlier in the
+same model block.
+
+An indexed parameter table assigns a finite number to every selected
+tuple. Use `[i,j] value` entries for tuples. For a one-dimensional table,
+`i value` and `[i] value` are both accepted. Indexed variable bounds can
+reference these parameters. Each expanded variable or row keeps a name
+such as `ship[north,east]` and follows set declaration order.
+
+```ampl
+set DEPOTS := north south;
+set REGIONS := east west;
+set ROUTES := (north,east) (north,west) (south,west);
+param demand {r in REGIONS} := east 2 west 3;
+param limit {(d,r) in ROUTES} := [north,east] 5 [north,west] 4 [south,west] 5;
+var ship {(d,r) in ROUTES} >= 0, <= limit[d,r];
+subject to service {r in REGIONS}:
+    sum {(d,k) in ROUTES : k = r} ship[d,k] = demand[r];
+minimize delivery: sum {(d,r) in ROUTES} 2 ship[d,r];
+```
+
+A sum takes the following product as its term. Use parentheses to include
+addition or subtraction inside the term. Nested sums can reference outer
+binders, and an empty sum contributes zero. The parser expands indexed
+expressions into the same scalar model and nonlinear expression graph
+used for scalar declarations.
 
 ## Nonlinear example
 

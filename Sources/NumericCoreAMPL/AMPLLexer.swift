@@ -77,9 +77,10 @@ enum AMPLLexer {
                         i += 1
                     }
                 }
-                // Guaranteed parseable: every character consumed above
-                // is a digit or a single ".", per the loop conditions.
-                tokens.append(Token(kind: .number(Double(text)!), position: start))
+                guard let value = Double(text), value.isFinite else {
+                    throw LexError.unexpectedCharacter(c, position: start)
+                }
+                tokens.append(Token(kind: .number(value), position: start))
                 continue
             }
 
@@ -102,7 +103,7 @@ enum AMPLLexer {
                 continue
             }
 
-            if "=+-*/^():;,".contains(c) {
+            if "=+-*/^():;,{}[]".contains(c) {
                 tokens.append(Token(kind: .symbol(String(c)), position: start))
                 i += 1
                 continue
