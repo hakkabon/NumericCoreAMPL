@@ -50,7 +50,7 @@ lowering with remote workers. Decode a distributed incumbent with
 `namedIncumbent(_:)` and convert its bounds with `sourceBounds(lower:upper:)`.
 
 The minimum supported pairing for all three solve paths is Swift-NumericCore
-**2.0.0** with its pinned Rust-NumericCore **v0.45.0** XCFramework.
+**2.0.0** with its pinned Rust-NumericCore **v0.45.1** XCFramework.
 SwiftPM obtains the Rust binary through Swift-NumericCore. The extensive form
 uses the simplex bridge, and the integration test requires both local and
 distributed Benders. It compares their incumbents and bounds in source
